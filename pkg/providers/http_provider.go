@@ -170,11 +170,65 @@ func (p *HTTPProvider) GetDefaultModel() string {
 	return ""
 }
 
+func resolveProviderEntry(_ *config.Config, p config.ProviderConfig, defaultAPIBase string) (string, string) {
+	apiKey := p.APIKey
+	apiBase := p.APIBase
+	if apiBase == "" {
+		apiBase = defaultAPIBase
+	}
+	return apiKey, apiBase
+}
+
 func CreateProvider(cfg *config.Config) (LLMProvider, error) {
 	model := cfg.Agents.Defaults.Model
 
 	var apiKey, apiBase string
 
+	// Phase 1: Explicit model-to-provider mapping
+	// Check each provider's models list in fixed order; first match wins.
+	specs := []struct {
+		cfg    config.ProviderConfig
+		getKey func(*config.Config) (string, string)
+	}{
+		{cfg.Providers.Anthropic, func(c *config.Config) (string, string) {
+			return resolveProviderEntry(c, c.Providers.Anthropic, "https://api.anthropic.com/v1")
+		}},
+		{cfg.Providers.OpenAI, func(c *config.Config) (string, string) {
+			return resolveProviderEntry(c, c.Providers.OpenAI, "https://api.openai.com/v1")
+		}},
+		{cfg.Providers.OpenRouter, func(c *config.Config) (string, string) {
+			return resolveProviderEntry(c, c.Providers.OpenRouter, "https://openrouter.ai/api/v1")
+		}},
+		{cfg.Providers.Groq, func(c *config.Config) (string, string) {
+			return resolveProviderEntry(c, c.Providers.Groq, "https://api.groq.com/openai/v1")
+		}},
+		{cfg.Providers.Zhipu, func(c *config.Config) (string, string) {
+			return resolveProviderEntry(c, c.Providers.Zhipu, "https://open.bigmodel.cn/api/paas/v4")
+		}},
+		{cfg.Providers.VLLM, func(c *config.Config) (string, string) {
+			return c.Providers.VLLM.APIKey, c.Providers.VLLM.APIBase // VLLM has no default
+		}},
+		{cfg.Providers.Gemini, func(c *config.Config) (string, string) {
+			return resolveProviderEntry(c, c.Providers.Gemini, "https://generativelanguage.googleapis.com/v1beta")
+		}},
+	}
+
+	for _, spec := range specs {
+		for _, m := range spec.cfg.Models {
+			if m == model {
+				apiKey, apiBase = spec.getKey(cfg)
+				if apiBase == "" {
+					return nil, fmt.Errorf("model %s is mapped to provider but api_base is not configured", model)
+				}
+				if apiKey == "" && !strings.HasPrefix(model, "bedrock/") {
+					return nil, fmt.Errorf("model %s is mapped to provider but api_key is not configured", model)
+				}
+				return NewHTTPProvider(apiKey, apiBase), nil
+			}
+		}
+	}
+
+	// Phase 2: Inference fallback (model name patterns)
 	lowerModel := strings.ToLower(model)
 
 	switch {

@@ -48,31 +48,38 @@
   "providers": {
     "anthropic": {
       "api_key": "",
-      "api_base": ""
+      "api_base": "",
+      "models": []
     },
     "openai": {
       "api_key": "",
-      "api_base": ""
+      "api_base": "",
+      "models": ["gpt-4", "gpt-3.5-turbo"]
     },
     "openrouter": {
       "api_key": "sk-or-v1-xxx",
-      "api_base": ""
+      "api_base": "",
+      "models": []
     },
     "groq": {
       "api_key": "gsk_xxx",
-      "api_base": ""
+      "api_base": "",
+      "models": ["gemma-7b-it", "llama2-70b-4096"]
     },
     "zhipu": {
       "api_key": "YOUR_ZHIPU_API_KEY",
-      "api_base": ""
+      "api_base": "",
+      "models": ["glm-4", "glm-4.7"]
     },
     "gemini": {
       "api_key": "",
-      "api_base": ""
+      "api_base": "",
+      "models": []
     },
     "vllm": {
       "api_key": "",
-      "api_base": ""
+      "api_base": "",
+      "models": []
     }
   },
   "tools": {

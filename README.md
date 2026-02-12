@@ -355,6 +355,25 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 > [!NOTE]
 > Groq provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
 
+You can explicitly map models to providers via the `models` array. This avoids guesswork when using custom endpoints or models whose names don't follow standard patterns (e.g., Groq's `gemma-7b-it` or `llama2-70b-4096`):
+
+```json
+"providers": {
+  "groq": {
+    "api_key": "gsk_xxx",
+    "api_base": "",
+    "models": ["gemma-7b-it", "llama2-70b-4096"]
+  },
+  "openai": {
+    "api_key": "your_openai_api_key",
+    "api_base": "https://your-custom-endpoint.com/v1",
+    "models": ["gpt-4", "gpt-3.5-turbo"]
+  }
+}
+```
+
+If `models` is not set or empty, PicoClaw falls back to inferring the provider from the model name.
+
 | Provider | Purpose | Get API Key |
 |----------|---------|-------------|
 | `gemini` | LLM (Gemini direct) | [aistudio.google.com](https://aistudio.google.com) |
@@ -481,6 +500,12 @@ PicoClaw supports scheduled reminders and recurring tasks through the `cron` too
 - **Cron expressions**: "Remind me at 9am daily" → uses cron expression
 
 Jobs are stored in `~/.picoclaw/workspace/cron/` and processed automatically.
+
+## 📚 Documentation
+
+- **[Project Overview](docs/PROJECT_OVERVIEW.md)** – Architecture, key components, data flow, extension guide
+- **[Development Guide](docs/DEVELOPMENT.md)** – Local setup, testing, debugging, skill development
+- **[LLM Response & Tools](docs/LLM_RESPONSE_AND_TOOLS.md)** – LLM response format, tool execution flow
 
 ## 🤝 Contribute & Roadmap
 
