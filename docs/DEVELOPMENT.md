@@ -197,6 +197,66 @@ When a cron job should reply to a channel:
 
 ---
 
+## Semantic Memory with mem0
+
+PicoClaw supports [mem0](https://github.com/mem0ai/mem0) as an optional semantic memory layer. When enabled, the agent automatically:
+
+1. **Searches** mem0 for relevant memories before each LLM call (based on the user's message)
+2. **Captures** new memories after each conversation turn (user message + assistant response)
+
+This works alongside the existing file-based memory (`MEMORY.md` and daily notes), providing vector-based semantic search and automatic fact extraction from conversations.
+
+### Starting the mem0 Server
+
+The easiest way is via the provided Docker Compose file:
+
+```bash
+cd docker
+OPENAI_API_KEY=sk-... docker compose -f docker-compose.mem0.yml up -d
+```
+
+This starts:
+- **Qdrant** vector store on port 6333
+- **mem0 REST API** on port 8080 (API docs at http://localhost:8080/docs)
+
+mem0 uses OpenAI for embeddings and memory extraction by default. Set your `OPENAI_API_KEY` environment variable accordingly.
+
+### Configuration
+
+Add the `mem0` section to your `~/.picoclaw/config.json`:
+
+```json
+{
+  "mem0": {
+    "enabled": true,
+    "api_url": "http://localhost:8080"
+  }
+}
+```
+
+Or use environment variables:
+
+```bash
+export PICOCLAW_MEM0_ENABLED=true
+export PICOCLAW_MEM0_API_URL=http://localhost:8080
+```
+
+### How It Works
+
+- **Search**: Before building the LLM context, PicoClaw queries mem0 with the user's message and retrieves up to 5 relevant memories. These are injected into the system prompt under "Semantic Memory (mem0)".
+- **Capture**: After the assistant responds, the conversation (user message + assistant reply) is sent to mem0 asynchronously. mem0 extracts facts and preferences automatically.
+- **User ID**: Each chat session maps to a mem0 user ID (derived from the session key, e.g. `telegram_12345`).
+- **Fallback**: If mem0 is disabled or unreachable, the agent falls back to file-based memory only. All mem0 errors are non-fatal.
+
+### Verifying mem0 Is Working
+
+Run the agent with `--debug` and look for log messages:
+- `mem0 semantic memory enabled` at startup
+- `mem0 memories retrieved` when memories are found
+- `mem0 memories captured` after each turn
+
+---
+
 ## Getting Help
 
 - **Issues**: https://github.com/sipeed/picoclaw/issues

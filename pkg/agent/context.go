@@ -157,10 +157,15 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	return result
 }
 
-func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID string) []providers.Message {
+func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID string, mem0Context ...string) []providers.Message {
 	messages := []providers.Message{}
 
 	systemPrompt := cb.BuildSystemPrompt()
+
+	// Add mem0 semantic memory context if provided
+	if len(mem0Context) > 0 && mem0Context[0] != "" {
+		systemPrompt += "\n\n---\n\n" + mem0Context[0]
+	}
 
 	// Add Current Session info if provided
 	if channel != "" && chatID != "" {

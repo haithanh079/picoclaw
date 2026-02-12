@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -35,6 +36,7 @@ type AgentLoop struct {
 	sessions       *session.SessionManager
 	contextBuilder *ContextBuilder
 	tools          *tools.ToolRegistry
+	mem0           *memory.Mem0Client // Optional: mem0 semantic memory client
 	running        bool
 	summarizing    sync.Map      // Tracks which sessions are currently being summarized
 }
@@ -91,6 +93,28 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	contextBuilder := NewContextBuilder(workspace)
 	contextBuilder.SetToolsRegistry(toolsRegistry)
 
+	// Initialize mem0 client if enabled
+	var mem0Client *memory.Mem0Client
+	if cfg.Mem0.Enabled && cfg.Mem0.APIURL != "" {
+		mem0Client = memory.NewMem0Client(cfg.Mem0.APIURL)
+		// Check connectivity at startup (non-fatal)
+		pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := mem0Client.Ping(pingCtx); err != nil {
+			logger.ErrorCF("agent", "mem0 server unreachable, semantic memory disabled",
+				map[string]interface{}{
+					"api_url": cfg.Mem0.APIURL,
+					"error":   err.Error(),
+				})
+			mem0Client = nil
+		} else {
+			logger.InfoCF("agent", "mem0 semantic memory enabled",
+				map[string]interface{}{
+					"api_url": cfg.Mem0.APIURL,
+				})
+		}
+	}
+
 	return &AgentLoop{
 		bus:            msgBus,
 		provider:       provider,
@@ -101,6 +125,7 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 		sessions:       sessionsManager,
 		contextBuilder: contextBuilder,
 		tools:          toolsRegistry,
+		mem0:           mem0Client,
 		running:        false,
 		summarizing:    sync.Map{},
 	}
@@ -233,7 +258,30 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 	// 1. Update tool contexts
 	al.updateToolContexts(opts.Channel, opts.ChatID)
 
-	// 2. Build messages
+	// 2. Search mem0 for relevant memories (if enabled)
+	var mem0Context string
+	if al.mem0 != nil {
+		mem0UserID := al.sessionKeyToMem0UserID(opts.SessionKey)
+		searchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		memories, err := al.mem0.Search(searchCtx, opts.UserMessage, mem0UserID, 5)
+		cancel()
+		if err != nil {
+			logger.DebugCF("agent", "mem0 search failed (non-fatal)",
+				map[string]interface{}{
+					"error":   err.Error(),
+					"user_id": mem0UserID,
+				})
+		} else if len(memories) > 0 {
+			mem0Context = memory.FormatMemoriesForContext(memories)
+			logger.InfoCF("agent", "mem0 memories retrieved",
+				map[string]interface{}{
+					"count":   len(memories),
+					"user_id": mem0UserID,
+				})
+		}
+	}
+
+	// 3. Build messages (with mem0 context if available)
 	history := al.sessions.GetHistory(opts.SessionKey)
 	summary := al.sessions.GetSummary(opts.SessionKey)
 	messages := al.contextBuilder.BuildMessages(
@@ -243,32 +291,60 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		nil,
 		opts.Channel,
 		opts.ChatID,
+		mem0Context,
 	)
 
-	// 3. Save user message to session
+	// 4. Save user message to session
 	al.sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 
-	// 4. Run LLM iteration loop
+	// 5. Run LLM iteration loop
 	finalContent, iteration, err := al.runLLMIteration(ctx, messages, opts)
 	if err != nil {
 		return "", err
 	}
 
-	// 5. Handle empty response
+	// 6. Handle empty response
 	if finalContent == "" {
 		finalContent = opts.DefaultResponse
 	}
 
-	// 6. Save final assistant message to session
+	// 7. Save final assistant message to session
 	al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
 	al.sessions.Save(al.sessions.GetOrCreate(opts.SessionKey))
 
-	// 7. Optional: summarization
+	// 8. Async: capture conversation in mem0 for memory extraction
+	if al.mem0 != nil {
+		mem0UserID := al.sessionKeyToMem0UserID(opts.SessionKey)
+		userMsg := opts.UserMessage
+		assistantMsg := finalContent
+		go func() {
+			addCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			mem0Messages := []memory.Mem0Message{
+				{Role: "user", Content: userMsg},
+				{Role: "assistant", Content: assistantMsg},
+			}
+			if err := al.mem0.Add(addCtx, mem0Messages, mem0UserID); err != nil {
+				logger.DebugCF("agent", "mem0 add failed (non-fatal)",
+					map[string]interface{}{
+						"error":   err.Error(),
+						"user_id": mem0UserID,
+					})
+			} else {
+				logger.DebugCF("agent", "mem0 memories captured",
+					map[string]interface{}{
+						"user_id": mem0UserID,
+					})
+			}
+		}()
+	}
+
+	// 9. Optional: summarization
 	if opts.EnableSummary {
 		al.maybeSummarize(opts.SessionKey)
 	}
 
-	// 8. Optional: send response via bus
+	// 10. Optional: send response via bus
 	if opts.SendResponse {
 		al.bus.PublishOutbound(bus.OutboundMessage{
 			Channel: opts.Channel,
@@ -277,7 +353,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		})
 	}
 
-	// 9. Log response
+	// 11. Log response
 	responsePreview := utils.Truncate(finalContent, 120)
 	logger.InfoCF("agent", fmt.Sprintf("Response: %s", responsePreview),
 		map[string]interface{}{
@@ -287,6 +363,12 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		})
 
 	return finalContent, nil
+}
+
+// sessionKeyToMem0UserID converts a session key (e.g. "telegram:12345") to a
+// mem0-compatible user ID by replacing colons with underscores.
+func (al *AgentLoop) sessionKeyToMem0UserID(sessionKey string) string {
+	return strings.ReplaceAll(sessionKey, ":", "_")
 }
 
 // runLLMIteration executes the LLM call loop with tool handling.
@@ -471,6 +553,11 @@ func (al *AgentLoop) GetStartupInfo() map[string]interface{} {
 
 	// Skills info
 	info["skills"] = al.contextBuilder.GetSkillsInfo()
+
+	// Mem0 info
+	info["mem0"] = map[string]interface{}{
+		"enabled": al.mem0 != nil,
+	}
 
 	return info
 }

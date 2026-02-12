@@ -15,6 +15,7 @@ type Config struct {
 	Providers ProvidersConfig `json:"providers"`
 	Gateway   GatewayConfig   `json:"gateway"`
 	Tools     ToolsConfig     `json:"tools"`
+	Mem0      Mem0Config      `json:"mem0"`
 	mu        sync.RWMutex
 }
 
@@ -122,6 +123,11 @@ type ToolsConfig struct {
 	Web WebToolsConfig `json:"web"`
 }
 
+type Mem0Config struct {
+	Enabled bool   `json:"enabled" env:"PICOCLAW_MEM0_ENABLED"`
+	APIURL  string `json:"api_url" env:"PICOCLAW_MEM0_API_URL"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Agents: AgentsConfig{
@@ -196,6 +202,10 @@ func DefaultConfig() *Config {
 					MaxResults: 5,
 				},
 			},
+		},
+		Mem0: Mem0Config{
+			Enabled: false,
+			APIURL:  "http://localhost:8080",
 		},
 	}
 }
