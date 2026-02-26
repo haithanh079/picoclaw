@@ -2,7 +2,7 @@ package channels
 
 import (
 	"context"
-	"fmt"
+	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 )
@@ -17,14 +17,14 @@ type Channel interface {
 }
 
 type BaseChannel struct {
-	config    interface{}
+	config    any
 	bus       *bus.MessageBus
 	running   bool
 	name      string
 	allowList []string
 }
 
-func NewBaseChannel(name string, config interface{}, bus *bus.MessageBus, allowList []string) *BaseChannel {
+func NewBaseChannel(name string, config any, bus *bus.MessageBus, allowList []string) *BaseChannel {
 	return &BaseChannel{
 		config:    config,
 		bus:       bus,
@@ -47,8 +47,33 @@ func (c *BaseChannel) IsAllowed(senderID string) bool {
 		return true
 	}
 
+	// Extract parts from compound senderID like "123456|username"
+	idPart := senderID
+	userPart := ""
+	if idx := strings.Index(senderID, "|"); idx > 0 {
+		idPart = senderID[:idx]
+		userPart = senderID[idx+1:]
+	}
+
 	for _, allowed := range c.allowList {
-		if senderID == allowed {
+		// Strip leading "@" from allowed value for username matching
+		trimmed := strings.TrimPrefix(allowed, "@")
+		allowedID := trimmed
+		allowedUser := ""
+		if idx := strings.Index(trimmed, "|"); idx > 0 {
+			allowedID = trimmed[:idx]
+			allowedUser = trimmed[idx+1:]
+		}
+
+		// Support either side using "id|username" compound form.
+		// This keeps backward compatibility with legacy Telegram allowlist entries.
+		if senderID == allowed ||
+			idPart == allowed ||
+			senderID == trimmed ||
+			idPart == trimmed ||
+			idPart == allowedID ||
+			(allowedUser != "" && senderID == allowedUser) ||
+			(userPart != "" && (userPart == allowed || userPart == trimmed || userPart == allowedUser)) {
 			return true
 		}
 	}
@@ -61,17 +86,13 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 		return
 	}
 
-	// Build session key: channel:chatID
-	sessionKey := fmt.Sprintf("%s:%s", c.name, chatID)
-
 	msg := bus.InboundMessage{
-		Channel:    c.name,
-		SenderID:   senderID,
-		ChatID:     chatID,
-		Content:    content,
-		Media:      media,
-		SessionKey: sessionKey,
-		Metadata:   metadata,
+		Channel:  c.name,
+		SenderID: senderID,
+		ChatID:   chatID,
+		Content:  content,
+		Media:    media,
+		Metadata: metadata,
 	}
 
 	c.bus.PublishInbound(msg)
